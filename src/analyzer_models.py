@@ -19,8 +19,4 @@ class CallAnalysis:
     parts: str = ""
     comment: str = ""
     red_segments: list[str] = field(default_factory=list)
-    scores: dict[str, int] = field(default_factory=dict)
-
-    @property
-    def total_score(self) -> int:
-        return sum(self.scores.values())
+    scores: dict[str, str] = field(default_factory=dict)

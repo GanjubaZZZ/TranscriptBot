@@ -139,14 +139,18 @@ class Pipeline:
         s = self._settings
         analysis = self._analyzer.analyze(transcript, audio_name)
 
-        score = 1 if "запис" in (analysis.result or "").lower() else 0
+        result_score = 1 if "запис" in (analysis.result or "").lower() else 0
+        total_score = sum(
+            1 for v in analysis.scores.values()
+            if str(v).strip() == "1"
+        ) + result_score
 
         fields: dict = {
             s.col_date: transcript[:50000],
             s.col_appeal_type: analysis.appeal_type,
             s.col_top100_compliance: analysis.top100_compliance,
             s.col_result: analysis.result,
-            s.col_score: str(score),
+            s.col_score: str(total_score),
             s.col_parts: analysis.parts,
         }
         for score_col, score_val in analysis.scores.items():

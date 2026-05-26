@@ -14,6 +14,8 @@ OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
 
 
 class CallAnalyzer:
+    _DATE_COLUMN = "Запис на сервіс, Дата"
+
     def __init__(
         self,
         model: str,
@@ -33,16 +35,10 @@ class CallAnalyzer:
             json={
                 "model": self._model,
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Ти експерт з оцінки телефонних розмов менеджерів автосервісу з клієнтами. "
-                            "Відповідай ТІЛЬКИ валідним JSON без markdown обгортки."
-                        ),
-                    },
+                    {"role": "system", "content": self._system_prompt()},
                     {"role": "user", "content": prompt},
                 ],
-                "temperature": 0.2,
+                "temperature": 0.1,
                 "stream": False,
             },
             timeout=300,
@@ -52,44 +48,95 @@ class CallAnalyzer:
         data = self._parse_json_response(raw)
         return self._parse_analysis(data)
 
+    @staticmethod
+    def _system_prompt() -> str:
+        return (
+            "Ти експерт з контролю якості телефонних розмов менеджерів автосервісу. "
+            "Твоя задача — проаналізувати транскрипцію дзвінка та повернути структурований результат.\n\n"
+            "ВАЖЛИВІ ПРАВИЛА:\n"
+            "1. Відповідай ТІЛЬКИ одним валідним JSON-об'єктом.\n"
+            "2. НЕ додавай текст до або після JSON.\n"
+            "3. НЕ огортай відповідь у ```json``` або інші маркери.\n"
+            "4. Всі строкові значення пиши українською мовою.\n"
+            "5. Для числових полів scores використовуй ТІЛЬКИ цілі числа 0 або 1.\n"
+            "6. Якщо інформація відсутня у розмові — пиши порожній рядок \"\".\n"
+            "7. Поле red_segments має містити ТОЧНІ цитати з поля comment."
+        )
+
     def _build_prompt(self, transcript: str, audio_filename: str) -> str:
-        criteria = "\n".join(f"- {c}" for c in self._score_columns)
-        score_keys = ", ".join(f'"{c}": 0 або 1' for c in self._score_columns)
-        return f"""Проаналізуй транскрипцію дзвінка в автосервіс.
+        numeric_cols = [c for c in self._score_columns if c != self._DATE_COLUMN]
+        criteria_lines = []
+        for c in numeric_cols:
+            criteria_lines.append(f"  - \"{c}\": 1 (виконано) або 0 (не виконано)")
+        criteria_block = "\n".join(criteria_lines)
+
+        score_keys = ", ".join(f'"{c}": 0' for c in numeric_cols)
+
+        date_field = ""
+        date_rules = ""
+        if self._DATE_COLUMN in self._score_columns:
+            date_field = f',\n    "{self._DATE_COLUMN}": "Запис відсутній"'
+            date_rules = (
+                f'\n\nПОЛЕ "{self._DATE_COLUMN}":\n'
+                f"- Якщо клієнт записався на сервіс — вкажи дату у форматі ДД.ММ.РРРР\n"
+                f"- Якщо дата не названа але запис є — напиши \"Так\"\n"
+                f"- Якщо запису НЕ було — напиши \"Запис відсутній\"\n"
+                f"- НЕ пиши числа 0 або 1 для цього поля"
+            )
+
+        return f"""Проаналізуй транскрипцію телефонного дзвінка в автосервіс.
 
 Файл: {audio_filename}
 
-Транскрипція:
+ТРАНСКРИПЦІЯ:
 ---
 {transcript[:8000]}
 ---
 
-Поверни JSON:
+Поверни ОДИН JSON-об'єкт з такою структурою (заповни кожне поле на основі розмови):
+
 {{
-  "appeal_type": "<Тип звернення: запис на сервіс / консультація / скарга / інше>",
-  "phone": "<номер телефону клієнта, якщо згадано, інакше порожньо>",
-  "branch": "<філія, якщо згадано>",
-  "manager": "<ім'я менеджера, якщо представився>",
+  "appeal_type": "запис на сервіс",
+  "phone": "",
+  "branch": "",
+  "manager": "",
   "scores": {{
-    {score_keys}
+    {score_keys}{date_field}
   }},
-  "top100_work": "<яка робота з топ 100 релевантна дзвінку>",
-  "top100_compliance": "<Так або Ні — чи дотримувався інструкцій топ 100>",
-  "top100_missed": "<які рекомендації топ 100 менеджер порушив; якщо все ОК — немає>",
-  "result": "<короткий результат дзвінка: запис / відмова / передзвон / інше>",
-  "score": "<загальна оцінка менеджера, напр. 7/10>",
-  "parts": "<запчастини, якщо обговорювали>",
-  "comment": "<розгорнутий коментар українською>",
-  "red_segments": [
-    "<фрази з comment: дзвінок НЕ ОК, менеджер погано/некоректно відповідає — для червоного виділення>"
-  ]
+  "top100_work": "",
+  "top100_compliance": "Так",
+  "top100_missed": "немає",
+  "result": "запис",
+  "parts": "",
+  "comment": "Коментар про якість розмови",
+  "red_segments": []
 }}
 
-Критерії scores (1 = так/добре виконано, 0 = ні/не виконано або погано):
-{criteria}
+ІНСТРУКЦІЇ ДЛЯ КОЖНОГО ПОЛЯ:
 
-red_segments — точні підрядки з поля comment.
-Відповідай ТІЛЬКИ JSON."""
+appeal_type: Один з варіантів — "запис на сервіс", "консультація", "скарга", "інше"
+
+phone: Номер телефону клієнта якщо згадується у розмові, інакше ""
+
+branch: Назва філії якщо згадується, інакше ""
+
+manager: Ім'я менеджера якщо представився, інакше ""
+
+scores: Оцінка менеджера по критеріях (ТІЛЬКИ 0 або 1):
+{criteria_block}
+{date_rules}
+
+top100_compliance: "Так" або "Ні" — чи дотримувався менеджер стандартів обслуговування
+
+top100_missed: Що саме менеджер не виконав зі стандартів. Якщо все ОК — "немає"
+
+result: Результат дзвінка — одне слово/фраза: "запис", "відмова", "передзвон", "консультація", "інше"
+
+parts: Запчастини які обговорювались, або ""
+
+comment: Розгорнутий коментар українською (2-4 речення) про якість обслуговування. Обов'язково зазнач проблемні моменти якщо вони є.
+
+red_segments: Масив рядків — ТОЧНІ цитати з поля comment де описані проблеми (менеджер погано відповідає, некоректна поведінка, порушення стандартів). Якщо проблем немає — порожній масив []."""
 
     @staticmethod
     def _parse_json_response(raw: str) -> dict:
@@ -103,34 +150,41 @@ red_segments — точні підрядки з поля comment.
         brace_end = text.rfind("}")
         if brace_end != -1:
             text = text[: brace_end + 1]
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            text = re.sub(r",\s*([}\]])", r"\1", text)
+            return json.loads(text)
 
     def _parse_analysis(self, data: dict) -> CallAnalysis:
-        scores: dict[str, int] = {}
+        scores: dict[str, str] = {}
         raw_scores = data.get("scores") or {}
         for col in self._score_columns:
-            val = raw_scores.get(col, 0)
-            try:
-                scores[col] = 1 if int(val) == 1 else 0
-            except (TypeError, ValueError):
-                scores[col] = 0
+            val = raw_scores.get(col, "0")
+            if col == self._DATE_COLUMN:
+                scores[col] = str(val) if val else "Запис відсутній"
+            else:
+                try:
+                    scores[col] = "1" if int(val) == 1 else "0"
+                except (TypeError, ValueError):
+                    scores[col] = "0"
 
         red = data.get("red_segments") or []
         if isinstance(red, str):
             red = [red]
 
         return CallAnalysis(
-            appeal_type=str(data.get("appeal_type", "")),
-            phone=str(data.get("phone", "")),
-            branch=str(data.get("branch", "")),
-            manager=str(data.get("manager", "")),
-            top100_work=str(data.get("top100_work", "")),
-            top100_compliance=str(data.get("top100_compliance", "")),
-            top100_missed=str(data.get("top100_missed", "")),
-            result=str(data.get("result", "")),
-            score=str(data.get("score", "")),
-            parts=str(data.get("parts", "")),
-            comment=str(data.get("comment", "")),
+            appeal_type=str(data.get("appeal_type") or ""),
+            phone=str(data.get("phone") or ""),
+            branch=str(data.get("branch") or ""),
+            manager=str(data.get("manager") or ""),
+            top100_work=str(data.get("top100_work") or ""),
+            top100_compliance=str(data.get("top100_compliance") or ""),
+            top100_missed=str(data.get("top100_missed") or ""),
+            result=str(data.get("result") or ""),
+            score=str(data.get("score") or ""),
+            parts=str(data.get("parts") or ""),
+            comment=str(data.get("comment") or ""),
             red_segments=[str(s) for s in red if s],
             scores=scores,
         )
