@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -90,10 +91,9 @@ class Pipeline:
             speaker_labels=settings.assemblyai_speaker_labels,
         )
         self._analyzer = CallAnalyzer(
-            api_key=settings.assemblyai_api_key,
-            model=settings.assemblyai_llm_model,
+            model=settings.ollama_model,
             score_columns=settings.score_column_list(),
-            gateway_url=settings.assemblyai_llm_gateway_url,
+            base_url=settings.ollama_url,
         )
 
     def ensure_work_spreadsheet(self) -> str:
@@ -130,7 +130,7 @@ class Pipeline:
         )
         logger.info("Audio files in work folder: %d", len(audio_files))
 
-        col_map, all_rows = self._sheets.read_header_and_rows()
+        col_map, all_rows = self._sheets.read_header_and_rows(header_row=2)
         rows_with_date = [
             r for r in all_rows if _parse_date(r.values.get(s.col_date, ""))
         ]
@@ -140,6 +140,8 @@ class Pipeline:
 
         for i, audio in enumerate(audio_files):
             self._process_audio(audio, col_map, rows_with_date, next_empty_row + i)
+            if i < len(audio_files) - 1:
+                time.sleep(5)
 
         logger.info("Pipeline finished.")
 

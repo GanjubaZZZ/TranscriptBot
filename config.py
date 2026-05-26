@@ -60,10 +60,9 @@ class Settings(BaseSettings):
     assemblyai_speech_models: str = "universal-3-pro,universal-2"
     assemblyai_language_code: str = "uk"
     assemblyai_speaker_labels: bool = True
-    assemblyai_llm_model: str = "claude-haiku-4-5-20251001"
-    assemblyai_llm_gateway_url: str = (
-        "https://llm-gateway.assemblyai.com/v1/chat/completions"
-    )
+
+    ollama_model: str = "gemma3:4b"
+    ollama_url: str = "http://localhost:11434/v1/chat/completions"
 
     temp_dir: Path = Path("./data/temp")
     credentials_path: Path = Path("credentials.json")

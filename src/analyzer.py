@@ -1,4 +1,4 @@
-"""Call analysis via AssemblyAI LLM Gateway — automotive service checklist."""
+"""Call analysis via local Ollama LLM — automotive service checklist."""
 
 from __future__ import annotations
 
@@ -10,31 +10,26 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.analyzer_models import CallAnalysis
 
-LLM_GATEWAY_URL = "https://llm-gateway.assemblyai.com/v1/chat/completions"
+OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
 
 
 class CallAnalyzer:
     def __init__(
         self,
-        api_key: str,
         model: str,
         score_columns: list[str],
-        gateway_url: str = LLM_GATEWAY_URL,
+        base_url: str = OLLAMA_URL,
     ):
-        self._api_key = api_key
         self._model = model
-        self._gateway_url = gateway_url
+        self._base_url = base_url
         self._score_columns = score_columns
 
-    @retry(wait=wait_exponential(min=2, max=30), stop=stop_after_attempt(3))
+    @retry(wait=wait_exponential(min=3, max=30), stop=stop_after_attempt(3))
     def analyze(self, transcript: str, audio_filename: str) -> CallAnalysis:
         prompt = self._build_prompt(transcript, audio_filename)
         response = requests.post(
-            self._gateway_url,
-            headers={
-                "authorization": self._api_key,
-                "content-type": "application/json",
-            },
+            self._base_url,
+            headers={"Content-Type": "application/json"},
             json={
                 "model": self._model,
                 "messages": [
@@ -42,15 +37,15 @@ class CallAnalyzer:
                         "role": "system",
                         "content": (
                             "Ти експерт з оцінки телефонних розмов менеджерів автосервісу з клієнтами. "
-                            "Відповідай ТІЛЬКИ валідним JSON без markdown."
+                            "Відповідай ТІЛЬКИ валідним JSON без markdown обгортки."
                         ),
                     },
                     {"role": "user", "content": prompt},
                 ],
-                "max_tokens": 2500,
                 "temperature": 0.2,
+                "stream": False,
             },
-            timeout=120,
+            timeout=300,
         )
         response.raise_for_status()
         raw = response.json()["choices"][0]["message"]["content"] or "{}"
@@ -66,7 +61,7 @@ class CallAnalyzer:
 
 Транскрипція:
 ---
-{transcript[:12000]}
+{transcript[:8000]}
 ---
 
 Поверни JSON:
@@ -80,7 +75,7 @@ class CallAnalyzer:
   }},
   "top100_work": "<яка робота з топ 100 релевантна дзвінку>",
   "top100_compliance": "<Так або Ні — чи дотримувався інструкцій топ 100>",
-  "top100_missed": "<які рекомендації топ 100 менеджер порушив; якщо все ОК — «немає»>",
+  "top100_missed": "<які рекомендації топ 100 менеджер порушив; якщо все ОК — немає>",
   "result": "<короткий результат дзвінка: запис / відмова / передзвон / інше>",
   "score": "<загальна оцінка менеджера, напр. 7/10>",
   "parts": "<запчастини, якщо обговорювали>",
@@ -93,7 +88,8 @@ class CallAnalyzer:
 Критерії scores (1 = так/добре виконано, 0 = ні/не виконано або погано):
 {criteria}
 
-red_segments — точні підрядки з поля comment."""
+red_segments — точні підрядки з поля comment.
+Відповідай ТІЛЬКИ JSON."""
 
     @staticmethod
     def _parse_json_response(raw: str) -> dict:
@@ -101,6 +97,12 @@ red_segments — точні підрядки з поля comment."""
         fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
         if fence:
             text = fence.group(1).strip()
+        brace_start = text.find("{")
+        if brace_start > 0:
+            text = text[brace_start:]
+        brace_end = text.rfind("}")
+        if brace_end != -1:
+            text = text[: brace_end + 1]
         return json.loads(text)
 
     def _parse_analysis(self, data: dict) -> CallAnalysis:
