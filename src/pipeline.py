@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
-from datetime import datetime
-from pathlib import Path
 
 from config import Settings
 from src.analyzer import CallAnalyzer
@@ -16,55 +13,6 @@ from src.google_auth import build_drive_service, build_sheets_service
 from src.sheets_client import ColumnMap, SheetsClient
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_date(value: str) -> datetime | None:
-    value = value.strip()
-    if not value:
-        return None
-    formats = (
-        "%d.%m.%Y",
-        "%d.%m.%y",
-        "%Y-%m-%d",
-        "%d/%m/%Y",
-        "%m/%d/%Y",
-    )
-    for fmt in formats:
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def _date_from_filename(name: str) -> datetime | None:
-    match = re.search(r"(\d{4})[-_]?(\d{2})[-_]?(\d{2})", name)
-    if match:
-        y, m, d = match.groups()
-        try:
-            return datetime(int(y), int(m), int(d))
-        except ValueError:
-            pass
-    match = re.search(r"(\d{2})[._](\d{2})[._](\d{4})", name)
-    if match:
-        d, m, y = match.groups()
-        try:
-            return datetime(int(y), int(m), int(d))
-        except ValueError:
-            pass
-    return None
-
-
-def _match_audio_to_row(
-    audio: dict, rows_with_date: list, col_date: str
-) -> int | None:
-    audio_date = _date_from_filename(audio["name"])
-    if audio_date:
-        for sheet_row in rows_with_date:
-            row_date = _parse_date(sheet_row.values.get(col_date, ""))
-            if row_date and row_date.date() == audio_date.date():
-                return sheet_row.row_index
-    return None
 
 
 class Pipeline:
@@ -131,25 +79,24 @@ class Pipeline:
         logger.info("Audio files in work folder: %d", len(audio_files))
 
         col_map, all_rows = self._sheets.read_header_and_rows(header_row=2)
-        rows_with_date = [
-            r for r in all_rows if _parse_date(r.values.get(s.col_date, ""))
-        ]
-        logger.info("Rows with date to process: %d", len(rows_with_date))
 
-        next_empty_row = (all_rows[-1].row_index + 1) if all_rows else 2
+        filled_rows = {r.row_index for r in all_rows if any(v.strip() for v in r.values.values())}
+        next_empty_row = (all_rows[-1].row_index + 1) if all_rows else 3
+        logger.info("Filled rows (will skip): %d, next empty: %d", len(filled_rows), next_empty_row)
 
+        row_cursor = next_empty_row
         for i, audio in enumerate(audio_files):
-            self._process_audio(audio, col_map, rows_with_date, next_empty_row + i)
+            self._process_audio(audio, col_map, row_cursor)
+            row_cursor += 1
             if i < len(audio_files) - 1:
                 time.sleep(5)
 
         logger.info("Pipeline finished.")
 
     def _process_audio(
-        self, audio: dict, col_map: ColumnMap, rows_with_date: list, fallback_row: int
+        self, audio: dict, col_map: ColumnMap, row_index: int
     ) -> None:
-        s = self._settings
-        folder_id = s.work_audio_folder_id
+        folder_id = self._settings.work_audio_folder_id
         name = audio["name"]
         logger.info("Processing: %s", name)
 
@@ -157,22 +104,6 @@ class Pipeline:
         if not transcript:
             logger.warning("Empty transcript for %s, skipping sheet update", name)
             return
-
-        row_index = _match_audio_to_row(audio, rows_with_date, s.col_date)
-        if row_index is None and rows_with_date:
-            for sheet_row in rows_with_date:
-                if not sheet_row.values.get(s.col_comment, "").strip():
-                    row_index = sheet_row.row_index
-                    break
-        if row_index is None:
-            row_index = fallback_row
-            audio_date = _date_from_filename(name)
-            if audio_date:
-                date_idx = col_map.index(s.col_date)
-                if date_idx is not None:
-                    self._sheets.update_cell(
-                        row_index, date_idx, audio_date.strftime("%d.%m.%Y")
-                    )
 
         self._update_sheet_row(row_index, col_map, transcript, name)
 
@@ -207,16 +138,15 @@ class Pipeline:
     ) -> None:
         s = self._settings
         analysis = self._analyzer.analyze(transcript, audio_name)
+
+        score = 1 if "запис" in (analysis.result or "").lower() else 0
+
         fields: dict = {
+            s.col_date: transcript[:50000],
             s.col_appeal_type: analysis.appeal_type,
-            s.col_phone: analysis.phone,
-            s.col_branch: analysis.branch,
-            s.col_manager: analysis.manager,
-            s.col_top100_work: analysis.top100_work,
             s.col_top100_compliance: analysis.top100_compliance,
-            s.col_top100_missed: analysis.top100_missed,
             s.col_result: analysis.result,
-            s.col_score: analysis.score,
+            s.col_score: str(score),
             s.col_parts: analysis.parts,
         }
         for score_col, score_val in analysis.scores.items():
