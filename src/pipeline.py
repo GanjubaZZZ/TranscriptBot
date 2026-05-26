@@ -136,13 +136,15 @@ class Pipeline:
         ]
         logger.info("Rows with date to process: %d", len(rows_with_date))
 
-        for audio in audio_files:
-            self._process_audio(audio, col_map, rows_with_date)
+        next_empty_row = (all_rows[-1].row_index + 1) if all_rows else 2
+
+        for i, audio in enumerate(audio_files):
+            self._process_audio(audio, col_map, rows_with_date, next_empty_row + i)
 
         logger.info("Pipeline finished.")
 
     def _process_audio(
-        self, audio: dict, col_map: ColumnMap, rows_with_date: list
+        self, audio: dict, col_map: ColumnMap, rows_with_date: list, fallback_row: int
     ) -> None:
         s = self._settings
         folder_id = s.work_audio_folder_id
@@ -161,8 +163,14 @@ class Pipeline:
                     row_index = sheet_row.row_index
                     break
         if row_index is None:
-            logger.warning("No matching row for %s", name)
-            return
+            row_index = fallback_row
+            audio_date = _date_from_filename(name)
+            if audio_date:
+                date_idx = col_map.index(s.col_date)
+                if date_idx is not None:
+                    self._sheets.update_cell(
+                        row_index, date_idx, audio_date.strftime("%d.%m.%Y")
+                    )
 
         self._update_sheet_row(row_index, col_map, transcript, name)
 

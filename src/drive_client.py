@@ -89,13 +89,14 @@ class DriveClient:
         tmp = Path("_upload_tmp.txt")
         tmp.write_text(content, encoding="utf-8")
         try:
-            media = MediaFileUpload(str(tmp), mimetype="text/plain", resumable=True)
+            media = MediaFileUpload(str(tmp), mimetype="text/plain", resumable=False)
             if existing_id:
                 updated = (
                     self._service.files()
                     .update(fileId=existing_id, media_body=media, fields="id")
                     .execute()
                 )
+                del media
                 return updated["id"]
 
             body = {"name": filename, "parents": [folder_id], "mimeType": "text/plain"}
@@ -104,9 +105,13 @@ class DriveClient:
                 .create(body=body, media_body=media, fields="id")
                 .execute()
             )
+            del media
             return created["id"]
         finally:
-            tmp.unlink(missing_ok=True)
+            try:
+                tmp.unlink()
+            except PermissionError:
+                pass
 
     def get_transcript_filename(self, audio_name: str) -> str:
         return Path(audio_name).stem + ".txt"

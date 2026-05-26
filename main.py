@@ -57,7 +57,7 @@ def main() -> None:
 
     if missing:
         print("Помилка: заповніть у файлі .env:", ", ".join(missing))
-        print("Приклад: скопіюйте .env.example → .env")
+        print("Приклад: скопіюйте .env.example в .env")
         sys.exit(1)
 
     pipeline = Pipeline(settings, force_retranscribe=args.force)
