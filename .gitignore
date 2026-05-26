@@ -1,0 +1,17 @@
+.env
+.env.local
+credentials.json
+client_secret_*.json
+token.json
+data/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.idea/
+.vscode/
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.flac
